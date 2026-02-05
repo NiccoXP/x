@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const cors = require('cors');
 const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const helmet = require('helmet');
@@ -26,6 +27,12 @@ app.use(helmet());
 app.use(mongoSanitize());
 app.use(express.json());
 
+app.use(cors({
+    origin: "*",
+    methods: ["GET", "POST", "PUT", "DELETE"],
+    credentials: true
+}));
+
 // Routes
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/chats', require('./routes/chat'));
@@ -38,3 +45,4 @@ app.use(errorHandler);
 
 const PORT = process.env.PORT || 5000;
 server.listen(PORT, () => console.log(`🚀 Server on port ${PORT}`));
+
