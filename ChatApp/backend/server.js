@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
+const cors = require('cors');
 const { Server } = require('socket.io');
 const { createAdapter } = require('@socket.io/redis-adapter');
 const helmet = require('helmet');
@@ -25,6 +26,7 @@ connectDB();
 app.use(helmet());
 app.use(mongoSanitize());
 app.use(express.json());
+app.use(cors());
 
 // Routes
 app.use('/api/auth', require('./routes/auth'));
