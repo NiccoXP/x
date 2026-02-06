@@ -1,0 +1,11 @@
+{
+  "name": "ChatApp",
+  "version": "1.0.0",
+  "description": "High-tech messaging app with Vanish Mode and Message Requests",
+  "main": "server.js",
+  "scripts": {
+    "start": "node backend/server.js",
+    "dev": "nodemon backend/server.js",
+    "seed": "node backend/seed.js"
+  }
+}
