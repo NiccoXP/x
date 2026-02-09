@@ -30,7 +30,7 @@ const login = async (req, res) => {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
     
-    const token = await user.generateJWT();
+    const token = user.generateJWT();
     
     delete user._doc.password;
     
@@ -77,7 +77,7 @@ const signup = async (req, res) => {
       password: hashedPassword
     });
     
-    const token = await newUser.generateJWT();
+    const token = newUser.generateJWT();
     
     delete newUser._doc.password;
     
