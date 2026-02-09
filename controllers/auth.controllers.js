@@ -4,7 +4,7 @@ const User = require('../models/user.model');
 const login = async (req, res) => {
   const { email, password } = req.body;
   
-  if (!fullName || !email || !password) {
+  if (!email || !password) {
     return res.status(400).json({ message: 'All fields are required' });
   }
   
