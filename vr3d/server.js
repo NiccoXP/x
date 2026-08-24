@@ -4,71 +4,147 @@ const http = require('http');
 const { Server } = require('socket.io');
 const mongoose = require('mongoose');
 const path = require('path');
+const PF = require('pathfinding');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-// Serve static frontend files
+const MAP_SIZE = 12;
+
+// Serve public static assets
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 1. Connect MongoDB
+// -------------------------------------------------------------
+// 1. MONGODB ATLAS CONNECTION & SCHEMAS
+// -------------------------------------------------------------
 const ATLAS_URI = process.env.ATLAS_URI;
-mongoose.connect(ATLAS_URI)
-  .then(() => console.log('MongoDB Connected'))
-  .catch(err => console.error(err));
 
-// 2. MongoDB Schema for Map Structures
+mongoose.connect(ATLAS_URI)
+  .then(() => console.log('Connected to MongoDB Atlas'))
+  .catch(err => console.error('MongoDB Atlas Connection Error:', err));
+
+const UserSchema = new mongoose.Schema({
+  username: String,
+  wood: { type: Number, default: 500 },
+  gold: { type: Number, default: 200 }
+});
+const User = mongoose.model('User', UserSchema);
+
 const StructureSchema = new mongoose.Schema({
   gridX: Number,
   gridZ: Number,
   type: String,
   ownerId: String,
-  createdAt: { type: Date, default: Date.now }
+  isUnderConstruction: { type: Boolean, default: false },
+  completesAt: Date
 });
 const Structure = mongoose.model('Structure', StructureSchema);
 
-// 3. Socket.io Real-Time Game State
-io.on('connection', async (socket) => {
-  console.log(`Player Connected: ${socket.id}`);
+// -------------------------------------------------------------
+// 2. PATHFINDING GRID INITIALIZATION
+// -------------------------------------------------------------
+const pathGrid = new PF.Grid(MAP_SIZE, MAP_SIZE);
 
-  // Send initial map state to newly connected player
-  try {
-    const existingStructures = await Structure.find({});
-    socket.emit('initMapState', existingStructures);
-  } catch (err) {
-    console.error(err);
+// Helper to update blocked tiles in pathfinding grid
+async function syncPathGrid() {
+  const builtStructures = await Structure.find({ isUnderConstruction: false });
+  builtStructures.forEach(s => {
+    pathGrid.setWalkableAt(s.gridX, s.gridZ, false);
+  });
+}
+
+// -------------------------------------------------------------
+// 3. SOCKET.IO GAME LOGIC & EVENT HANDLERS
+// -------------------------------------------------------------
+io.on('connection', async (socket) => {
+  console.log(`Player connected: ${socket.id}`);
+
+  // Create or fetch a test user for this session
+  let user = await User.findOne({ username: 'Player1' });
+  if (!user) {
+    user = await User.create({ username: 'Player1', wood: 500, gold: 200 });
   }
 
-  // Handle building construction request
+  // Send initial game state to connected client
+  const structures = await Structure.find({});
+  socket.emit('initGameState', {
+    user: { id: user._id, wood: user.wood, gold: user.gold },
+    structures
+  });
+
+  // Handle Construction Requests (Server-Authoritative Timer)
   socket.on('requestBuild', async (data) => {
     const { gridX, gridZ, type } = data;
+    const BUILD_COST_WOOD = 100;
+    const BUILD_TIME_SECONDS = 5;
 
-    // Check if slot is occupied
-    const occupied = await Structure.findOne({ gridX, gridZ });
-    if (occupied) {
-      socket.emit('errorMsg', 'Tile occupied!');
-      return;
+    const currentUser = await User.findById(user._id);
+    if (currentUser.wood < BUILD_COST_WOOD) {
+      return socket.emit('errorMsg', 'Not enough wood to build!');
     }
 
-    // Save structure in DB
-    const newStructure = new Structure({
+    const occupied = await Structure.findOne({ gridX, gridZ });
+    if (occupied) {
+      return socket.emit('errorMsg', 'Tile is already occupied!');
+    }
+
+    // Deduct resources
+    currentUser.wood -= BUILD_COST_WOOD;
+    await currentUser.save();
+
+    // Create under-construction structure record
+    const completesAt = new Date(Date.now() + BUILD_TIME_SECONDS * 1000);
+    const structure = new Structure({
       gridX,
       gridZ,
       type: type || 'hall',
-      ownerId: socket.id
+      ownerId: socket.id,
+      isUnderConstruction: true,
+      completesAt
     });
-    await newStructure.save();
+    await structure.save();
 
-    // Broadcast construction to ALL connected players
-    io.emit('structurePlaced', newStructure);
+    // Broadcast construction started (Renders temporary state)
+    io.emit('buildingStarted', { structure, updatedWood: currentUser.wood });
+
+    // Server-side construction timer
+    setTimeout(async () => {
+      structure.isUnderConstruction = false;
+      await structure.save();
+
+      // Block pathfinding tile once building completes
+      pathGrid.setWalkableAt(gridX, gridZ, false);
+
+      io.emit('buildingCompleted', structure);
+    }, BUILD_TIME_SECONDS * 1000);
+  });
+
+  // Handle Troop March Requests (A* Pathfinding Execution)
+  socket.on('marchTroops', (data) => {
+    const { startX, startZ, endX, endZ } = data;
+
+    const gridClone = pathGrid.clone();
+    const finder = new PF.AStarFinder({ allowDiagonal: false });
+    const path = finder.findPath(startX, startZ, endX, endZ, gridClone);
+
+    if (path.length === 0) {
+      return socket.emit('errorMsg', 'No valid path available to destination!');
+    }
+
+    // Generate unique march ID and broadcast route waypoints
+    const marchId = `march_${Date.now()}_${Math.random().toString(36).substr(2, 4)}`;
+    io.emit('troopMarching', { marchId, path });
   });
 
   socket.on('disconnect', () => {
-    console.log(`Player Disconnected: ${socket.id}`);
+    console.log(`Player disconnected: ${socket.id}`);
   });
 });
 
-server.listen(3000, () => {
-  console.log('Server running on http://localhost:3000');
+// Initialize grid blocking state from database and start server
+syncPathGrid().then(() => {
+  server.listen(3000, () => {
+    console.log('Viking Strategy Game Server active at http://localhost:3000');
+  });
 });
